@@ -1,0 +1,1 @@
+extern struct uk_thread_status_block tsb_comp{{ comp_nr }}[32];

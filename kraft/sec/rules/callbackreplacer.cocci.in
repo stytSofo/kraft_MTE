@@ -1,0 +1,129 @@
+@cbvoid{{ rule_nr }}@
+identifier func;
+fresh identifier nfunc = "_" ## func;
+@@
+
++ void nfunc();
+- __attribute__(({{ lib_from_name }}_callback)) void
++ void __attribute__((section(".text_shared")))
+func(void) {
++ {{ gate }}({{ comp_from_nb }}, {{ comp_cur_nb }}, nfunc);
++ }
++
++ void nfunc(void) {
+...
+}
+
+@cbvoid_ret_static{{ rule_nr }}@
+identifier func;
+fresh identifier nfunc = "_" ## func;
+type Tret;
+@@
+
++ static Tret nfunc();
+- __attribute__(({{ lib_from_name }}_callback)) static Tret
++ static Tret __attribute__((section(".text_shared")))
+func(void) {
++ Tret ret;
++ {{ gate_r }}({{ comp_from_nb }}, {{ comp_cur_nb }}, ret, nfunc);
++ return ret;
++ }
++
++ static Tret nfunc() {
+...
+}
+
+@cbvoid_ret{{ rule_nr }}@
+identifier func;
+fresh identifier nfunc = "_" ## func;
+type Tret;
+@@
+
++ Tret nfunc();
+- __attribute__(({{ lib_from_name }}_callback)) Tret
++ Tret __attribute__((section(".text_shared")))
+func(void) {
++ Tret ret;
++ {{ gate_r }}({{ comp_from_nb }}, {{ comp_cur_nb }}, ret, nfunc);
++ return ret;
++ }
++
++ Tret nfunc() {
+...
+}
+
+@cb1arg{{ rule_nr }}@
+type T1;
+identifier func, I1;
+fresh identifier nfunc = "_" ## func;
+@@
+
++ void nfunc(T1 I1);
+- __attribute__(({{ lib_from_name }}_callback)) void
++ void __attribute__((section(".text_shared")))
+func(T1 I1) {
++ {{ gate }}({{ comp_from_nb }}, {{ comp_cur_nb }}, nfunc, I1);
++ }
++
++ void nfunc(T1 I1) {
+...
+}
+
+@cb1arg_ret{{ rule_nr }}@
+type T1;
+identifier func, I1;
+fresh identifier nfunc = "_" ## func;
+type Tret;
+@@
+
++ Tret nfunc(T1 I1);
+- __attribute__(({{ lib_from_name }}_callback)) Tret
++ Tret __attribute__((section(".text_shared")))
+func(T1 I1) {
++ Tret ret;
++ {{ gate_r }}({{ comp_from_nb }}, {{ comp_cur_nb }}, ret, nfunc, I1);
++ return ret;
++ }
++
++ Tret nfunc(T1 I1) {
+...
+}
+
+@cbargs{{ rule_nr }}@
+identifier func;
+fresh identifier nfunc = "_" ## func;
+parameter list[n={2...100}] PL;
+expression list EL;
+@@
+
++ void nfunc(PL);
+- __attribute__(({{ lib_from_name }}_callback)) void
++ void __attribute__((section(".text_shared")))
+func(PL@EL) {
++ {{ gate }}({{ comp_from_nb }}, {{ comp_cur_nb }}, nfunc, EL);
++ }
++
++ void nfunc(PL) {
+...
+}
+
+@cbargs_ret{{ rule_nr }}@
+identifier func;
+fresh identifier nfunc = "_" ## func;
+parameter list[n={2...100}] PL;
+expression list EL;
+type Tret;
+@@
+
++ Tret nfunc(PL);
+- __attribute__(({{ lib_from_name }}_callback)) Tret
++ Tret __attribute__((section(".text_shared")))
+func(PL@EL) {
++ Tret ret;
++ {{ gate_r }}({{ comp_from_nb }}, {{ comp_cur_nb }}, ret, nfunc, EL);
++ return ret;
++ }
++
++ Tret nfunc(PL) {
+...
+}

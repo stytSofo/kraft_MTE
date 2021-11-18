@@ -40,6 +40,8 @@ from pathlib import Path
 import click
 import requests
 import six
+import re
+import glob
 
 import kraft.util as util
 from kraft.arch import Architecture
@@ -71,6 +73,22 @@ from kraft.types import break_component_naming_format
 from kraft.types import ComponentType
 from kraft.unikraft import Unikraft
 
+from kraft.sec import get_sec_replacement
+from kraft.sec import get_sec_rule
+from kraft.sec.driver.intelpku import IntelPKUDriver
+from kraft.sec.driver.vmept import VMEPTDriver
+from kraft.sec.driver.fcalls import FcallsDriver
+from kraft.sec import textual_replacement
+from kraft.sec import coccinelle_rewrite
+from kraft.sec import add_local_linkerscript
+
+import glob
+import filecmp
+import tempfile
+import shutil
+import subprocess
+import fileinput
+
 
 class Application(Component):
     _type = ComponentType.APP
@@ -88,6 +106,7 @@ class Application(Component):
             self._name = os.path.basename(self._localdir)
 
         self._config = kwargs.get('config', None)
+        self.libincludes = None
 
         # Determine how configuration is passed to this class
         if self._config is None:
@@ -97,7 +116,7 @@ class Application(Component):
 
             targets = kwargs.get("targets", dict())
             if not isinstance(targets, TargetManager):
-                targets = TargetManager(targets)
+                targets = TargetManager(targets, unikraft)
 
             libraries = kwargs.get("libraries", dict())
             if not isinstance(unikraft, LibraryManager):
@@ -137,6 +156,124 @@ class Application(Component):
         if self._config is None:
             self._config = dict()
 
+    def find_files(self):
+        # This is a dirty way to get all the files
+        def is_core_lib(libname, libfiles):
+            def is_core_file(x):
+                return x.startswith(self._config.unikraft.localdir)
+            return len(list(filter(is_core_file, libfiles[libname]))) != 0
+
+        def scan_for_files(lib, libfiles, ext):
+            libpath = ""
+            if is_core_lib(lib, lib_files):
+                l = lib
+                if l.startswith('lib'):
+                    l = l[len('lib'):]
+                libpath = os.path.join(os.environ['UK_ROOT'], "lib", l)
+            else:
+                libpath = os.path.join(os.environ['UK_LIBS'], lib)
+
+            for file in glob.iglob(libpath + '/**/*' + ext, recursive=True):
+                if file not in lib_files[lib]:
+                    lib_files[lib].append(file)
+
+            for l in self.libraries:
+                if lib == l.name:
+                    for file in glob.iglob(l.builddir + '/**/*' + ext, recursive=True):
+                        lib_files[lib].append(file)
+
+        if os.path.exists(self.unikraft.localdir):
+            print_srcs = self.make_raw('print-srcs')
+            logger.debug("Retrieving list of library files...")
+            output = subprocess.check_output(" ".join(print_srcs), shell=True)
+
+            # remove first and last lines (not part of the actual content)
+            # note: -2 because of the EOF \n
+            raw_files = str(output).split('\\n')[1:-2]
+
+            raw_lib_files = {} # {lib: [file, file, ...], ...}
+            for (lib,files) in zip(raw_files[0::2],raw_files[1::2]):
+                # remove that weird {|common, |x86, ...} suffix from some paths...
+                def rmprefix(x):
+                    last = x.rfind("|")
+                    if last > 0: return x[:last]
+                    return x
+
+                lst = list(map(rmprefix, list(filter(None, files.split(" ")))))
+                # remove lib prefix, kraft doesn't want it
+                raw_lib_files[str(lib).strip("lib").rstrip(":").strip()] = lst
+
+            lib_files = {}
+            # merge some entries: newlibc, newlibm, newlibglue should belong together
+            for (lib,files) in raw_lib_files.items():
+                name = lib
+
+                for l in self.libraries:
+                    l_gluedir = os.path.join(os.environ['UK_LIBS'], l.name)
+                    if (len(list(filter(lambda x: x.startswith(l.builddir), files))) != 0 or
+                        len(list(filter(lambda x: x.startswith(l_gluedir),  files))) != 0):
+                        logger.debug("Mapping " + lib + " to " + l.name)
+                        name = l.name
+                        break
+
+                if name in lib_files.keys():
+                    lib_files[name].extend(files)
+                else:
+                    lib_files[name] = files
+
+            # find potentially missing .c/.h files: recursively scan lib folders...
+            for lib in lib_files.keys():
+                scan_for_files(lib, lib_files, ".c")
+                scan_for_files(lib, lib_files, ".h")
+
+            # find the default compartment
+            default_comp = list(filter(lambda x: x.default, self.compartments))[0]
+
+            # create missing lib objects
+            for (lib,files) in lib_files.items():
+                # create missing lib objects
+                # note: don't set hardening, if these libs had hardening they'd
+                # already be instanciated
+                # TODO cleanup path detection, this is a huge mess
+                if lib not in [l.name for l in self.libraries]:
+                    localdir = os.path.join(os.environ['UK_LIBS'], lib)
+                    if is_core_lib(lib, lib_files):
+                        localdir = os.path.join(os.environ['UK_ROOT'], "lib", lib[len('lib'):])
+                    if (lib.startswith("app")):
+                        # this is an application, another dirty workaround...
+                        rootp = os.path.normpath(os.path.join(os.environ['UK_ROOT'], "..", "apps"))
+                        if (len(files) > 1):
+                            filep = os.path.normpath(files[0])
+                            if (len(filep[len(rootp):].split("/")[0]) == 0):
+                                localdir = os.path.join(rootp, filep[len(rootp):].split("/")[1])
+                            else:
+                                localdir = os.path.join(rootp, filep[len(rootp):].split("/")[0])
+
+                    self.config.libraries.add(Library(
+                        name=lib,
+                        version=None,
+                        manifest=None,
+                        localdir=localdir,
+                        is_core=is_core_lib(lib, lib_files),
+                        compartment=default_comp
+                    ))
+
+            # finally, add the library
+            for l in self.libraries:
+                lname = l.name
+                if lname not in lib_files: lname = "lib%s" % lname
+                for f in lib_files[lname]: l.add_file(f)
+
+    def find_includedirs(self):
+        # TODO same todos as find_files()...
+        if os.path.exists(self.unikraft.localdir):
+            makep = self.make_raw('-pn')
+            logger.debug("Retrieving list of library include dirs...")
+            output = subprocess.check_output(" ".join(makep), shell=True)
+
+            self.libincludes = list(set(map(lambda x: x.strip().rstrip("\\\\n#"),
+                re.findall("\-I(/root/[^\s]*)", str(output)))))
+
     @classmethod  # noqa: C901
     @click.pass_context
     def from_workdir(ctx, cls, workdir=None, force_init=False, use_versions=[]):
@@ -155,6 +292,21 @@ class Application(Component):
         )
 
     @property
+    @click.pass_context
+    def builddir(ctx, self):
+        if self.localdir is None:
+            raise None
+
+        if not os.path.exists(ctx.obj.workdir):
+            return None
+
+        builddir = os.path.join(ctx.obj.workdir, UNIKRAFT_BUILDDIR)
+        if not os.path.exists(builddir):
+            return None
+
+        return builddir
+
+    @property
     def components(self):
         components = list()
 
@@ -168,6 +320,22 @@ class Application(Component):
             components.append(library)
 
         return components
+
+    @property
+    def unikraft(self):
+        return self.config.unikraft
+
+    @property
+    def targets(self):
+        return self.config.targets.all()
+
+    @property
+    def compartments(self):
+        return self.config.compartments.all()
+
+    @property
+    def libraries(self):
+        return self.config.libraries.all()
 
     @property
     def manifests(self):
@@ -219,7 +387,10 @@ class Application(Component):
 
         lib_paths = []
         for lib in self.config.libraries.all():
-            lib_paths.append(lib.localdir)
+            # terrible hack because the application is considered as a microlibrary
+            # TODO Alex how can we avoid this?
+            if not lib.is_core and not lib.name.startswith("app"):
+                lib_paths.append(lib.localdir)
 
         cmd.append('L=%s' % ":".join(lib_paths))
 
@@ -248,9 +419,6 @@ class Application(Component):
         """
         Configure a Unikraft application.
         """
-
-        if not self.is_configured():
-            self.init()
 
         if target is not None and isinstance(target, Target):
             arch = target.architecture
@@ -310,17 +478,34 @@ class Application(Component):
             dotconfig.append(plat.kconfig_enabled_flag)
 
         for lib in self.config.libraries.all():
-            if not lib.is_downloaded:
+            is_downloaded = False
+
+            if lib.is_core and self.unikraft.is_downloaded:
+                is_downloaded = True
+            elif lib.is_downloaded:
+                is_downloaded = True
+
+            if not is_downloaded:
                 raise MissingComponent(lib.name)
 
             dotconfig.extend(lib.kconfig)
             dotconfig.append(lib.kconfig_enabled_flag)
 
+            # Depending on which compartment was selected by kraft.yaml, we might
+            # need to enable some more options
+            options.append(lib.compartment.mechanism.driver.kconfig_opt)
+
         # Add any additional confguration options, and overriding existing
         # configuraton options.
         for new_opt in options:
+            if new_opt is None:
+                continue
+
             o = new_opt.split('=')
             for exist_opt in dotconfig:
+                if exist_opt is None:
+                    continue
+
                 e = exist_opt.split('=')
                 if o[0] == e[0]:
                     dotconfig.remove(exist_opt)
@@ -333,6 +518,9 @@ class Application(Component):
         with os.fdopen(fd, 'w+') as tmp:
             logger.debug('Using the following defconfig:')
             for line in dotconfig:
+                if line is None:
+                    continue
+                
                 logger.debug(' > ' + line)
                 tmp.write(line + '\n')
 
@@ -413,7 +601,324 @@ class Application(Component):
         if ctx.obj.settings.fetch_prioritize_origin is False:
             extra.extend(self.list_possible_mirrors())
 
+        extra.append('fetch')
+
         return self.make(extra, verbose)
+
+    @click.pass_context
+    def compartmentalize(ctx, self):
+        self.find_files()
+        self.find_includedirs()
+
+        # add heap local vars replacement rule
+        DSS_enabled = False
+        SHSTACK_enabled = False
+        FCALLS_enabled = False
+        with open(os.path.join(self.localdir, ".config")) as conf:
+            conf_content = conf.read()
+            if 'CONFIG_LIBFLEXOS_NONE=y' in conf_content:
+                # building with the fcalls backend, no need for shared data
+                SHSTACK_enabled = True
+                FCALLS_enabled = True
+            elif 'CONFIG_LIBFLEXOS_VMEPT=y' in conf_content:
+                logger.info("Building for VM/EPT")
+                SHSTACK_enabled = True
+            elif 'CONFIG_LIBFLEXOS_ENABLE_DSS=y' in conf_content:
+                logger.info("Building with DSS enabled")
+                DSS_enabled = True
+            else:
+                logger.info("Building with stack-to-heap variable conversion enabled")
+                if 'CONFIG_LIBFLEXOS_GATE_INTELPKU_SHARED_STACKS=y' in conf_content:
+                    logger.info("Note: shared stacks enabled")
+                    SHSTACK_enabled = True
+                else:
+                    logger.info("Note: private stacks mode")
+
+        fulldifff = os.path.join("/tmp", next(tempfile._get_candidate_names())) + ".diff"
+        fulldiff = open(fulldifff, "a")
+
+        # cleanup declared but unused compartments
+        to_remove = []
+        for comp in self.compartments:
+            found = False
+            for lib in self.libraries:
+                if (lib.compartment == comp):
+                    found = True
+            if (not found and not comp.default):
+                logger.warn("Declared compartment #" + str(comp.number) +
+                            " (" + comp.name +
+                            ") but no library associated with it "
+                            "(ignoring it, here be dragons!)")
+                to_remove.append(comp)
+
+        largest = 0
+        for comp in to_remove:
+            if (comp.number > largest):
+                largest = comp.number
+            self.compartments.remove(comp)
+
+        if (len(to_remove) > 0):
+            for comp in self.compartments:
+                if (comp.number > largest):
+                    logger.error("At least compartment #" + str(largest) +
+                               " is unused, while #" + str(comp.number) + " (" + comp.name +
+                               ") is: such holes of unusued compartments are illegal")
+                    raise KraftError('Invalid compartment list.')
+
+        # first rewrite: make sure to create the right number of sections in the
+        # linker script, that we initialize them in ukboot, etc.
+        if (len(self.compartments) > 1):
+
+            def simple_replace(template_path, path, marker, shstack_enabled=True):
+                # shstack_enabled = should we replace when shared stacks are enabled?
+                if SHSTACK_enabled and not shstack_enabled:
+                    return
+                filep = os.path.join(self._config.unikraft.localdir, path)
+                comps = list(set(self.compartments) - set([c for c in self.compartments if c.default]))
+                textual_replacement(comps, template_path, filep,
+                        marker, fulldiff=fulldiff)
+
+            # FIXME hardcoded paths here
+            simple_replace(
+                "linkerscript_data.in",
+                "plat/kvm/x86/link64.lds.S",
+                "/* __FLEXOS MARKER__: insert compartment data sections here. */")
+            simple_replace(
+                "linkerscript_bss.in",
+                "plat/kvm/x86/link64.lds.S",
+                "/* __FLEXOS MARKER__: insert compartment bss sections here. */")
+
+            tmpl = ""
+            if (type(self.compartments[0].mechanism.driver) == VMEPTDriver):
+                tmpl = "linkerscript_initarray_ept.in",
+            elif (type(self.compartments[0].mechanism.driver) == IntelPKUDriver or
+                  type(self.compartments[0].mechanism.driver) == FcallsDriver):
+                tmpl = "linkerscript_initarray_vanilla.in",
+            else:
+                logger.error("Transformations not supported for this mechanism (" +
+                        str(type(self.compartments[0].mechanism.driver))+ ")")
+                exit(1)
+            simple_replace(
+                tmpl, "plat/kvm/x86/link64.lds.S",
+                "/* __FLEXOS MARKER__: insert compartment init array sections here. */")
+
+            simple_replace(
+                "ukboot_decl_sections.in",
+                "lib/ukboot/boot.c",
+                "/* __FLEXOS MARKER__: insert compartment sections decls here. */")
+            simple_replace(
+                "ukboot_init_sections.in",
+                "lib/ukboot/boot.c",
+                "/* __FLEXOS MARKER__: insert compartment sections initializers here. */")
+            simple_replace(
+                "flexos_core_alloc_decls.in",
+                "lib/flexos-core/include/flexos/impl/intelpku.h",
+                "/* __FLEXOS MARKER__: insert compartment allocator decls here. */")
+            simple_replace(
+                "ukalloc_getdefault.in",
+                "lib/ukalloc/include/uk/alloc.h",
+                "/* __FLEXOS MARKER__: insert compartment-specific allocator cases here. */")
+
+            # these are related to per compartment stacks, so we don't want to
+            # do these replacements if we are using the shared stack.
+            simple_replace(
+                "flexos_core_tsb_decls.in",
+                "lib/flexos-core/intelpku.c",
+                "/* __FLEXOS MARKER__: insert tsb decls here. */",
+                shstack_enabled=False)
+            simple_replace(
+                "flexos_core_tsb_hdecls.in",
+                "lib/flexos-core/include/flexos/impl/intelpku.h",
+                "/* __FLEXOS MARKER__: insert tsb extern decls here. */",
+                shstack_enabled=False)
+            simple_replace(
+                "ukthread_initcall.in",
+                "lib/uksched/sched.c",
+                "/* __FLEXOS MARKER__: uk_thread_init call */",
+                shstack_enabled=False)
+            simple_replace(
+                "ukthread_initdecl.in",
+                "lib/uksched/include/uk/thread.h",
+                "/* __FLEXOS MARKER__: uk_thread_init decl */",
+                shstack_enabled=False)
+            simple_replace(
+                "ukthread_initdecl.in",
+                "lib/uksched/sched.c",
+                "/* __FLEXOS MARKER__: uk_thread_init decl */",
+                shstack_enabled=False)
+            simple_replace(
+                "ukthread_initdecl.in",
+                "lib/uksched/thread.c",
+                "/* __FLEXOS MARKER__: uk_thread_init decl */",
+                shstack_enabled=False)
+            simple_replace(
+                "uksched_initstacks.in",
+                "lib/uksched/sched.c",
+                "/* __FLEXOS MARKER__: insert stack allocations here. */",
+                shstack_enabled=False)
+            simple_replace(
+                "ukthread_installstacks.in",
+                "lib/uksched/thread.c",
+                "/* __FLEXOS MARKER__: insert stack installations here. */",
+                shstack_enabled=False)
+            simple_replace(
+                "uksched_idleinit_nulls.in",
+                "lib/ukschedcoop/schedcoop.c",
+                "/* __FLEXOS MARKER__: uk_sched_idle_init nulls */",
+                shstack_enabled=False)
+
+        # this replacement is a little bit less standard :)
+        comp_uksched = 0
+        comp_vfscore = 0
+        for lib in self.libraries:
+            if lib.name == "uksched":
+                comp_uksched = lib.compartment.number
+            if lib.name == "vfscore":
+                comp_vfscore = lib.compartment.number
+
+        filep = os.path.join(self._config.unikraft.localdir, "lib/ukboot/boot.c")
+        backup_src = os.path.join("/tmp", next(tempfile._get_candidate_names())) + ".bak"
+        shutil.copyfile(filep, backup_src)
+
+        with fileinput.FileInput(filep, inplace=True) as file:
+            for line in file:
+                print(line.replace("/* __FLEXOS MARKER__: uksched allocator */",
+                                "flexos_comp" + str(comp_uksched) + "_alloc"), end='')
+        with fileinput.FileInput(filep, inplace=True) as file:
+            for line in file:
+                print(line.replace("/* __FLEXOS MARKER__: vfscore compartment */",
+                                str(comp_vfscore)), end='')
+
+        cmd = ["diff", "-urNp", backup_src, filep]
+        subprocess.call(cmd, stdout=fulldiff, stderr=subprocess.STDOUT)
+
+        # now do library-specific rewrites
+        for lib in self.libraries:
+            # first add per-library linker scripts
+            if (not lib.compartment.default):
+                add_local_linkerscript(lib, fulldiff=fulldiff)
+
+            # then generate cocci files dynamically from the template
+            gr_rule_template = get_sec_rule("gatereplacer.cocci.in")
+            cb_rule_template = get_sec_rule("callbackreplacer.cocci.in")
+            gr_rule_template = gr_rule_template.replace("{{ comp_cur_nb }}",
+                str(lib.compartment.number))
+            cb_rule_template = cb_rule_template.replace("{{ comp_cur_nb }}",
+                str(lib.compartment.number))
+            gr_rule = ""
+
+            def gr_gen_rule(dest_name, dest_comp):
+                gr_rule = str(gr_rule_template)
+                name = dest_name
+
+                if (dest_name != "lname" and not dest_name.startswith("app-")):
+                    name = "lib" + name.replace("-", "")
+
+                gr_rule = gr_rule.replace("{{ lib_dest_name }}", name)
+                gr_rule = gr_rule.replace("{{ comp_dest_nb }}", str(dest_comp.number))
+
+                gr_gate = dest_comp.mechanism.driver.gate_str
+
+                if dest_comp == lib.compartment:
+                    # FIXME magic value, put somewhere
+                    gr_gate = "flexos_nop_gate"
+
+                gr_rule = gr_rule.replace("{{ gate }}", gr_gate)
+                gr_rule = gr_rule.replace("{{ gate_r }}", gr_gate + "_r")
+                gr_rule = gr_rule.replace("{{ rule_nr }}", str(gr_gen_rule.rule_ctr))
+
+                rule = gr_rule + "\n"
+                gr_gen_rule.rule_ctr += 1
+                return rule
+
+            gr_gen_rule.rule_ctr = 0
+
+            def cb_gen_rule(dest_name, dest_comp):
+                cb_rule = str(cb_rule_template)
+                name = dest_name.replace("-", "")
+
+                if (dest_name != "lname" and not dest_name.startswith("app")
+                                        and not dest_name.startswith("lib")):
+                    name = "lib" + name
+
+                cb_rule = cb_rule.replace("{{ lib_from_name }}", name)
+                cb_rule = cb_rule.replace("{{ comp_from_nb }}", str(dest_comp.number))
+
+                cb_gate = lib.compartment.mechanism.driver.gate_str
+
+                if dest_comp == lib.compartment:
+                    # FIXME magic value, put somewhere
+                    cb_gate = "flexos_nop_gate"
+
+                cb_rule = cb_rule.replace("{{ gate }}", cb_gate)
+                cb_rule = cb_rule.replace("{{ gate_r }}", cb_gate + "_r")
+                cb_rule = cb_rule.replace("{{ rule_nr }}", str(cb_gen_rule.rule_ctr))
+                rule = cb_rule + "\n"
+
+                cb_gen_rule.rule_ctr += 1
+                return rule
+
+            cb_gen_rule.rule_ctr = 0
+
+            # FIXME FLEXOS this is a hack to make sure that we don't overwhelm
+            # Coccinelle with hundreds of rules. We should be able to improve it
+            # with future upstream releases of Coccinelle, talking about it with Julia
+            whitelisted_libs = ["libvfscore", "libuknetdev", "newlib",
+                                "libuksched", "libuksignal", "libukboot"]
+            for dest_lib in self.libraries:
+                if (not dest_lib.compartment.default) and (dest_lib.name != lib.name):
+                    # this library is not in the default compartment, add a specific rule
+                    gr_rule += gr_gen_rule(dest_lib.name, dest_lib.compartment)
+                    gr_rule += cb_gen_rule(dest_lib.name, dest_lib.compartment)
+                    # FIXME FLEXOS this is a hack :)
+                    if (dest_lib.name == "newlib"):
+                        gr_rule += cb_gen_rule("libc", dest_lib.compartment)
+                if ((dest_lib.compartment.default) and (dest_lib.name != lib.name)
+                        and dest_lib.name in whitelisted_libs):
+                    gr_rule += cb_gen_rule(dest_lib.name, dest_lib.compartment)
+                    # FIXME FLEXOS this is a hack :)
+                    if (dest_lib.name == "newlib"):
+                        gr_rule += cb_gen_rule("libc", dest_lib.compartment)
+
+            # default rule, lname will match anything so this rule has to be at the end
+            default_comp = [comp for comp in self.compartments if comp.default][0]
+            gr_rule += gr_gen_rule("lname", default_comp)
+
+            # add malloc/free/calloc replacement rule
+            gr_rule += get_sec_rule("mallocreplacer.cocci")
+
+            # add heap local vars replacement rule
+            if FCALLS_enabled:
+                gr_rule += get_sec_rule("remove-attrs.cocci")
+            elif DSS_enabled:
+                gr_rule += get_sec_rule("dss-localvars.cocci")
+            else:
+                # FIXME this is a terrible hack, but hey, we don't have time
+                # for some reason rules are applied only once by Coccinelle,
+                # so, if we don't repeat it, it doesn't get applied.
+                # 20 "ought to be enough for anybody" haha.
+                template = get_sec_rule("heap-localvars-1.cocci.in")
+                for i in range(15):
+                    gr_rule += template.replace("{{ rule_nr }}", str(i)) + "\n"
+
+                # Est-il jour ? Est-il nuit ? horreur crépusculaire !
+                template = get_sec_rule("heap-localvars-2.cocci.in")
+                for i in range(15):
+                    gr_rule += template.replace("{{ rule_nr }}", str(i)) + "\n"
+
+            # add global vars replacement rule
+            gr_rule += get_sec_rule("globalvars.cocci")
+
+            # write rule somewhere so that Coccinelle can access it
+            rule_file = os.path.join("/tmp", next(tempfile._get_candidate_names()) + ".cocci")
+            with open(rule_file, "w") as f:
+                f.write(gr_rule)
+            logger.debug("Coccinelle rules for " + lib.name + ": " + rule_file)
+
+            coccinelle_rewrite(lib, rule_file, fulldiff)
+
+        logger.info("Full diff of rewritings: %s" % fulldifff)
+        fulldiff.close()
 
     @click.pass_context
     def prepare(ctx, self, verbose=False):

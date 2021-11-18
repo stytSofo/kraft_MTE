@@ -1,0 +1,15 @@
+@heap_array{{ rule_nr }}@
+identifier p;
+type T;
+function func;
+expression size;
+@@
+func (...) {
+... when exists
+    when any
+- T p[size] __attribute__((flexos_whitelist));
++ T *p = uk_malloc(flexos_shared_alloc, size * sizeof(T));
+...
+++ uk_free(flexos_shared_alloc, p);
+return ...;
+}

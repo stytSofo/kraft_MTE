@@ -85,14 +85,22 @@ class GitListProvider(ListProvider):
         if origin is None:
             return False
 
+        if origin[-4:] == ".git":
+            return True
+
+        if origin[:6] == "git://":
+            return True
+
         g = Git()
 
         try:
             g.ls_remote(origin)
-        except GitCommandError:
-            return False
+            return True
 
-        return True
+        except GitCommandError:
+            pass
+
+        return False
 
     @click.pass_context
     def probe(ctx, self, origin=None, items=None, return_threads=False):
@@ -141,7 +149,7 @@ class GitListProvider(ListProvider):
         if manifest.git is not None:
             try:
                 repo.create_remote('origin', manifest.git)
-            except GitCommandError as e:
+            except GitCommandError:
                 pass
 
         try:
@@ -183,6 +191,8 @@ def get_component_from_git_repo(ctx, origin=None):
     pathparts = uri.path.split('/')
     if len(pathparts) >= 2:
         potential_typename = '/'.join(pathparts[-2:])
+        if potential_typename[-4:] == ".git":
+            potential_typename = potential_typename[:-4]
         _type, _name, _, _ = break_component_naming_format(potential_typename)
     elif len(pathparts) == 1:
         _type, _name, _, _ = break_component_naming_format(uri.path)
@@ -196,19 +206,21 @@ def get_component_from_git_repo(ctx, origin=None):
         )
 
     localdir = None
-    if os.path.exists(origin):
-        localdir = origin
 
-    repo = GitRepo(origin)
+    if _name[-4:] == ".git":
+        _name = _name[:-4]
+
     item = ManifestItem(
         provider=ListProviderType.GIT,
         name=_name,
         type=_type.shortname,
         dist=UNIKRAFT_RELEASE_STABLE,
         git=origin,
-        manifest=origin,
-        localdir=localdir
+        manifest=origin
     )
+
+    with ctx:
+        localdir = item.localdir
 
     stable = ManifestItemDistribution(
         name=UNIKRAFT_RELEASE_STABLE
@@ -218,8 +230,86 @@ def get_component_from_git_repo(ctx, origin=None):
         name=UNIKRAFT_RELEASE_STAGING
     )
 
-    for version in repo.tags:
-        commit = repo.commit(version)
+    versions = {}
+    branches = {}
+
+    if os.path.exists(localdir):
+        try:
+            repo = GitRepo(localdir)
+        except:
+            repo = GitRepo.init(localdir)
+
+        try:
+            repo.delete_remote('origin')
+        except GitCommandError as e:
+            pass
+
+        repo.create_remote('origin', origin)
+
+        logger.debug("Fetching remote origin for %s..." % origin)
+        repo.git.fetch("origin")
+        
+        local_branches = repo.git.branch(
+            '--format=%(objectname) %(refname:short)', '-a'
+        ).split('\n')
+
+        for branch in local_branches:
+            # skip fast forwards
+            if "->" in branch or "detached" in branch:
+                continue
+
+            commit, branch = branch.split()
+
+            if branch == "HEAD":
+                continue
+
+            branch = branch.replace("remotes/", "")
+            branch = branch.replace("origin/", "")
+            branch = branch.replace("refs/heads/", "")
+
+            branches[branch] = commit
+        
+        local_tags = repo.tags
+        for tag in local_tags:
+            commit = repo.commit(tag)
+
+            # interpret the tag name for symbolic distributions
+            ref = GIT_UNIKRAFT_TAG_PATTERN.match(str(tag))
+            if ref is not None:
+                tag = ref.group(1)
+
+            stable.add_version(ManifestItemVersion(
+                git_sha=str(commit),
+                version=str(tag),
+                timestamp=datetime.fromtimestamp(int(commit.committed_date))
+            ))
+
+    g = Git()
+    remote_branches = g.ls_remote(origin).split('\n')
+    for branch in remote_branches:
+        commit, branch = branch.split()
+
+        if branch == "HEAD":
+            continue
+
+        if "refs/tags" in branch:
+            continue
+
+        branch = branch.replace("remotes/", "")
+        branch = branch.replace("origin/", "")
+        branch = branch.replace("refs/heads/", "")
+    
+        branches[branch.strip()] = commit.strip()
+
+    remote_versions = g.ls_remote('--tags', origin).split('\n')
+    for version in remote_versions:
+        if len(version) == 0:
+            continue
+
+        commit, version = version.split()
+
+        version = version.replace("refs/tags/", "")
+        version = version.replace("^{}", "")
 
         # interpret the tag name for symbolic distributions
         ref = GIT_UNIKRAFT_TAG_PATTERN.match(str(version))
@@ -227,46 +317,39 @@ def get_component_from_git_repo(ctx, origin=None):
             version = ref.group(1)
 
         stable.add_version(ManifestItemVersion(
-            git_sha=str(commit),
-            version=version,
-            timestamp=datetime.fromtimestamp(int(commit.committed_date))
+            git_sha=commit,
+            version=version
+            # TODO figure out how to get remote timestamp
         ))
 
     # Only create the stable distribution if versions exist within
     if len(stable.versions) > 0:
         item.add_distribution(stable)
 
-    for ref in repo.git.branch('-a').split('\n'):
-        # skip fast forwards
-        if "->" in ref or "detached" in ref:
-            continue
-
-        branch = ref.strip().replace("*", "")
-        branch = branch.strip().replace("remotes/", "")
-        branch = branch.strip().replace("origin/", "")
+    for branch in branches:
         if branch in UNIKRAFT_RELEASE_STABLE_VARIATIONS:
             continue # we've done this one seperately
 
-        # Add this commit to the staging branch (this usually happens when
-        # commits have been applied on top of a HEAD)
-        if ref.strip() == "":
-            dist = staging
+        commit = branches[branch]
 
-        # Add the branch as a distribution
-        else:
-            dist = ManifestItemDistribution(
-                name=branch,
-            )
+        dist = ManifestItemDistribution(
+            name=branch,
+        )
 
         if branch in item.dists.keys():
             dist = item.dists[branch]
+        
+        timestamp = None
+        if os.path.exists(localdir):
+            repo = GitRepo(localdir)
+            commit = repo.commit(commit)
+            timestamp = datetime.fromtimestamp(int(commit.committed_date))
 
         # Add the latest commit to that branch as the only version
-        commit = repo.commit(branch)
         dist.add_version(ManifestItemVersion(
             git_sha=str(commit),
             version=str(commit)[:7],
-            timestamp=datetime.fromtimestamp(int(commit.committed_date))
+            timestamp=timestamp
         ))
 
         item.add_distribution(dist)

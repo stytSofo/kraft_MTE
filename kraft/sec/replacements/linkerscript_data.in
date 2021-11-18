@@ -1,0 +1,12 @@
+	. = ALIGN(0x1000);
+	_comp{{ comp_nr }} = .;
+	.data_comp{{ comp_nr }} :
+        {
+		PROVIDE(flexos_comp{{ comp_nr }}_alloc = .);
+		/* here: enough to store the compartment's allocator
+		 * FIXME derive from roundup(sizeof(struct uk_alloc)) */
+		. = . + 0x1000;
+		*(.data_comp{{ comp_nr }} .data_comp{{ comp_nr }}.*)
+		. = ALIGN(0x1000);
+	}
+	_ecomp{{ comp_nr }} = .;

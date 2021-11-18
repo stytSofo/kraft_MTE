@@ -72,6 +72,31 @@ setup(
         'scripts/xen-guest',
         'scripts/kraft-net'
     ],
+    package_data={
+        'kraft.cmd.build' :  [
+            'coccinelle-rules/gatereplacer.cocci.in',
+            'coccinelle-rules/callbackreplacer.cocci.in',
+            'coccinelle-rules/heap-localvars-1.cocci.in',
+            'coccinelle-rules/heap-localvars-2.cocci.in',
+            'coccinelle-rules/mallocreplacer.cocci',
+            'coccinelle-rules/dss-localvars.cocci',
+            'coccinelle-rules/globalvars.cocci',
+            'misc-replacements/linkerscript_data.in',
+            'misc-replacements/linkerscript_bss.in',
+            'misc-replacements/localextra.ld.in',
+            'misc-replacements/ukboot_decl_sections.in',
+            'misc-replacements/ukboot_init_sections.in',
+            'misc-replacements/flexos_core_tsb_decls.in',
+            'misc-replacements/flexos_core_tsb_hdecls.in',
+            'misc-replacements/flexos_core_alloc_decls.in',
+            'misc-replacements/ukalloc_getdefault.in',
+            'misc-replacements/ukthread_initdecl.in',
+            'misc-replacements/ukthread_initcall.in',
+            'misc-replacements/uksched_initstacks.in',
+            'misc-replacements/ukthread_installstacks.in',
+            'misc-replacements/uksched_idleinit_nulls.in'
+        ]
+    },
     keywords=[],
     tests_require=['pytest', 'coveralls'],
     zip_safe=False,

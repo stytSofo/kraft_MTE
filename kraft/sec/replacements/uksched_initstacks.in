@@ -1,0 +1,2 @@
+void *stack_comp{{ comp_nr }} = NULL;
+ALLOC_COMP_STACK(stack_comp{{ comp_nr }}, {{ comp_nr }});

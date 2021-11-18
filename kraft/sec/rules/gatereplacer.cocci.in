@@ -1,0 +1,13 @@
+@gatereplacer_return{{ rule_nr }}@
+expression list EL;
+expression ret, lname;
+@@
+- flexos_gate_r({{ lib_dest_name }}, ret, EL);
++ {{ gate_r }}({{ comp_cur_nb }}, {{ comp_dest_nb }}, ret, EL);
+
+@gatereplacer_noreturn{{ rule_nr }}@
+expression list EL;
+expression lname;
+@@
+- flexos_gate({{ lib_dest_name }}, EL);
++ {{ gate }}({{ comp_cur_nb }}, {{ comp_dest_nb }}, EL);

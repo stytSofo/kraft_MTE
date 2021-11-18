@@ -1,0 +1,43 @@
+@heap_primitive_init{{ rule_nr }}@
+identifier p;
+type T;
+function func;
+expression E;
+@@
+func (...) {
+... when exists
+    when any
+T
+- p __attribute__((flexos_whitelist)) = E
++ *p = uk_malloc(flexos_shared_alloc, sizeof(T))
+;
++ *p = E;
+<... when exists
+     when any
+- p
++ (*p)
+...>
+++ uk_free(flexos_shared_alloc, p);
+return ...;
+}
+
+@heap_primitive_noinit{{ rule_nr }}@
+identifier p;
+type T;
+function func;
+@@
+func (...) {
+... when exists
+    when any
+T
+- p __attribute__((flexos_whitelist))
++ *p = uk_malloc(flexos_shared_alloc, sizeof(T))
+;
+<... when exists
+     when any
+- p
++ (*p)
+...>
+++ uk_free(flexos_shared_alloc, p);
+return ...;
+}

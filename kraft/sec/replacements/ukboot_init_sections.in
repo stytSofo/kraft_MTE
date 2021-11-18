@@ -1,0 +1,5 @@
+	PROTECT_SECTION("data_comp{{ comp_nr }}", {{ comp_nr }}, (void *) __uk_image_symbol(_comp{{ comp_nr }}),
+					 (void *) __uk_image_symbol(_ecomp{{ comp_nr }}));
+	PROTECT_SECTION("bss_comp{{ comp_nr }}", {{ comp_nr }}, (void *) __uk_image_symbol(_bss_comp{{ comp_nr }}),
+					(void *) __uk_image_symbol(_ebss_comp{{ comp_nr }}));
+	ASSIGN_HEAP("comp{{ comp_nr }}", {{ comp_nr }} /* key */, 1000 /* size */, flexos_comp{{ comp_nr }}_alloc);

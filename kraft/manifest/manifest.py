@@ -147,18 +147,29 @@ class ManifestItemVersion(object):
         """
         Return state values to be pickled.
         """
-        return {
+        config = {
             "meta": {
                 "name": self._version
             },
-            "data": {
-                "git_sha": self._git_sha,
-                "timestamp": str(self._timestamp),
-                "tarball": self._tarball,
-                "tarball_size": self._tarball_size,
-                "tarball_checksum": self._tarball_checksum
-            }
+            "data": {}
         }
+
+        if self._git_sha is not None:
+            config["data"]["git_sha"] = self._git_sha
+
+        if self._tarball is not None:
+            config["data"]["tarball"] = self._tarball
+
+        if self._tarball_size is not None:
+            config["data"]["tarball_size"] = self._tarball_size
+
+        if self._tarball_checksum is not None:
+            config["data"]["tarball_checksum"] = self._tarball_checksum
+
+        if self._timestamp is not None:
+            config["data"]["timestamp"] = str(self._timestamp)
+
+        return config
 
 
 class ManifestItemDistribution(object):
@@ -296,7 +307,8 @@ class ManifestItemDistribution(object):
         if self._latest is not None:
             data["latest_git_sha"] = self._latest.git_sha
             data["latest_version"] = self._latest.version
-            data["latest_timestamp"] = str(self._latest.timestamp)
+            if self._latest.timestamp is not None:
+                data["latest_timestamp"] = str(self._latest.timestamp)
             data["latest_tarball"] = self._latest.tarball
             data["latest_tarball_size "] = self._latest.tarball_size
             data["latest_tarball_checksum"] = self._latest.tarball_checksum
@@ -367,7 +379,8 @@ class ManifestItem(object):
 
     _localdir = None
     @property
-    def localdir(self):
+    @click.pass_context
+    def localdir(ctx, self):
         """
         Determine the local directory for this manifest.  Essentially this
         uses the environmental variable for the respective type of component

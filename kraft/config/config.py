@@ -58,6 +58,7 @@ from kraft.logger import logger
 from kraft.plat.network import NetworkManager
 from kraft.plat.volume import VolumeManager
 from kraft.target import TargetManager
+from kraft.sec import CompartmentManager
 from kraft.types import break_component_naming_format
 from kraft.types import ComponentType
 from kraft.unikraft import Unikraft
@@ -152,7 +153,7 @@ class Config(object):
             return
 
         if isinstance(targets, dict):
-            targets = TargetManager(**targets)
+            targets = TargetManager(**targets, core=self.unikraft)
 
         elif not isinstance(targets, TargetManager):
             logger.warn("Cannot apply targets to configuration")
@@ -181,6 +182,28 @@ class Config(object):
             return
 
         self._libraries = libraries
+
+    """
+    :param compartments: Dictionary mapping library names to description dictionaries
+    :type  compartments: :class:`dict`
+    """
+    _compartments = None
+    @property
+    def compartments(self): return self._compartments
+
+    @compartments.setter
+    def compartments(self, compartments=None):
+        if compartments is None:
+            return
+
+        if isinstance(compartments, dict):
+            compartments = CompartmentManager(**compartments)
+
+        elif not isinstance(compartments, CompartmentManager):
+            logger.warn("Cannot apply compartments to configuration")
+            return
+
+        self._compartments = compartments
 
     """
     :param volumes: Dictionary mapping of execution description dictionaries
@@ -233,7 +256,8 @@ class Config(object):
         self.before = kwargs.get('before', None)
         self.after = kwargs.get('after', None)
         self.unikraft = kwargs.get('unikraft', None)
-        self.targets = kwargs.get('targets', TargetManager([]))
+        self.targets = kwargs.get('targets', TargetManager([], self.unikraft))
+        self.compartments = kwargs.get('compartments', CompartmentManager([]))
         self.libraries = kwargs.get('libraries', LibraryManager({}))
         self.volumes = kwargs.get('volumes', VolumeManager({}))
         self.networks = kwargs.get('networks', NetworkManager({}))
@@ -315,6 +339,9 @@ class KraftFile(namedtuple(
 
     def get_targets(self):
         return self.config.get('targets', [])
+
+    def get_compartments(self):
+        return self.config.get('compartments', [])
 
     def get_libraries(self):
         return self.config.get('libraries', {})
@@ -440,6 +467,13 @@ def process_kraftfile(kraftfile, environment, service_name=None,  # noqa: C901
         processed_config['unikraft'] = {
             'version': processed_config['unikraft']
         }
+
+    processed_config['compartments'] = interpolate_environment_variables(
+        kraftfile.version,
+        kraftfile.get_compartments(),
+        "compartments",
+        environment
+    )
 
     processed_config['libraries'] = interpolate_environment_variables(
         kraftfile.version,
@@ -609,6 +643,12 @@ def load_config(config_details, use_versions=[]):  # noqa: C901
         'targets',
         config_details.working_dir
     )
+    compartments = load_mapping(
+        config_details.config_files,
+        'get_compartments',
+        'compartments',
+        config_details.working_dir
+    )
     libraries = load_mapping(
         config_details.config_files,
         'get_libraries',
@@ -653,6 +693,7 @@ def load_config(config_details, use_versions=[]):  # noqa: C901
                     libraries[lib]['version'] = version
 
     core = Unikraft(**unikraft)
+    comps = CompartmentManager(compartments)
 
     return Config(
         specification=main_file.version,
@@ -662,7 +703,8 @@ def load_config(config_details, use_versions=[]):  # noqa: C901
         after=after,
         unikraft=core,
         targets=TargetManager(targets, core),
-        libraries=LibraryManager(libraries),
+        compartments=comps,
+        libraries=LibraryManager(libraries, compartments=comps.all(), core=core),
         volumes=VolumeManager(volumes),
         networks=NetworkManager(networks),
     )

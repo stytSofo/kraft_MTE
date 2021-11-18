@@ -1,0 +1,1 @@
+extern char _comp{{ comp_nr }}[], _ecomp{{ comp_nr }}[], _bss_comp{{ comp_nr }}[], _ebss_comp{{ comp_nr }}[];

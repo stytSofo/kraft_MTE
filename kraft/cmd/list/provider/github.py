@@ -106,7 +106,7 @@ class GitHubListProvider(GitListProvider):
 
             # Does the origin contain a wildcard in the repo name?
             if "*" in github_repo:
-                logger.info("Populating via wildcard: %s" % origin)
+                logger.debug("Populating via wildcard: %s" % origin)
 
                 org = github_api.get_organization(github_org)
                 repos = org.get_repos()
@@ -132,7 +132,7 @@ class GitHubListProvider(GitListProvider):
                             repo.name
                         ))
             else:
-                logger.info("Using direct repository: %s" % origin)
+                logger.debug("Using Github repository: %s" % origin)
 
                 if return_threads:
                     thread = ErrorPropagatingThread(

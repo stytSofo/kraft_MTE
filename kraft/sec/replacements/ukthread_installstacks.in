@@ -1,0 +1,2 @@
+unsigned long sp{{ comp_nr }};
+SETUP_STACK(stack_comp{{ comp_nr }}, {{ comp_nr }}, NULL, NULL, sp{{ comp_nr }});

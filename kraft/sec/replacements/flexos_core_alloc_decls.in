@@ -1,0 +1,2 @@
+/* Dynamic allocator for compartment {{ comp_nr }} */
+extern struct uk_alloc *flexos_comp{{ comp_nr }}_alloc;

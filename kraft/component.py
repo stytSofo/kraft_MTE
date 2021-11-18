@@ -108,6 +108,13 @@ class Component(object):
 
         return self._localdir
 
+    @property
+    def makefile_uk(self):
+        if self.localdir is not None:
+            return os.path.join(self.localdir, MAKEFILE_UK)
+        
+        return None
+
     _kconfig_enabled_flag = None
 
     @property
@@ -141,9 +148,14 @@ class Component(object):
     @property
     def type(self): return self._type
 
+    _core = None
+    @property
+    def core(self): return self._core
+
     @click.pass_context  # noqa: C901
     def __init__(ctx, self, *args, **kwargs):
         self._name = kwargs.get("name", None)
+        self._core = kwargs.get("core", None)
         self._type = kwargs.get("type", self._type)
         self._manifest = kwargs.get("manifest", None)
         self._localdir = kwargs.get("localdir", None)
@@ -151,6 +163,7 @@ class Component(object):
 
         version = kwargs.get("version", None)
         config = kwargs.get("config", None)
+        self._is_core = kwargs.get("is_core", False)
 
         if isinstance(config, (six.string_types, int, float)):
             version = str(config)
@@ -224,6 +237,10 @@ class Component(object):
             and os.path.exists(self.localdir) \
             and os.path.exists(os.path.join(self.localdir, MAKEFILE_UK))
 
+    @property
+    def is_core(self):
+        return self._is_core
+
     def download(self, localdir=None, equality=ManifestVersionEquality.EQ,
                  use_git=False, override_existing=False):
         if self._manifest is None:
@@ -286,7 +303,7 @@ class ComponentManager(object):
     @property
     def cls(self): return self._cls
 
-    def __init__(self, components=[], cls=None, **extra):  # noqa:C901
+    def __init__(self, components=[], cls=None, core=None, **extra):  # noqa:C901
         if cls is not None:
             self._cls = cls
 
@@ -294,16 +311,17 @@ class ComponentManager(object):
             logger.critical("Cannot instantiate manager, missing cls: %s", self)
             return
 
-        if components is None:
-            self._components = list()
+        self._components = list()
 
-        elif isinstance(components, list):
+        if isinstance(components, list):
             for component in components:
                 if isinstance(component, self.cls):
                     self._components.append(component)
                 else:
                     self._components.append(self.cls(
-                        **component, **extra
+                        core=core,
+                        **component,
+                        **extra
                     ))
 
         elif isinstance(components, dict):
@@ -313,11 +331,13 @@ class ComponentManager(object):
                 if isinstance(config, six.string_types):
                     inst = self.cls(
                         name=component,
+                        core=core,
                         version=config,
                     )
                 elif isinstance(config, dict):
                     inst = self.cls(
                         name=component,
+                        core=core,
                         **config,
                         **extra
                     )

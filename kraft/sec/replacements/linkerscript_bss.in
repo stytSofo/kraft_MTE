@@ -1,0 +1,8 @@
+	. = ALIGN(0x1000);
+	_bss_comp{{ comp_nr }} = .;
+	.bss_comp{{ comp_nr }} :
+        {
+		*(.bss_comp{{ comp_nr }} .bss_comp{{ comp_nr }}.*)
+		. = ALIGN(0x1000);
+	}
+	_ebss_comp{{ comp_nr }} = .;

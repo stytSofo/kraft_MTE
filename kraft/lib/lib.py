@@ -35,6 +35,7 @@ from __future__ import unicode_literals
 import datetime
 import fileinput
 import os
+import six
 from pathlib import Path
 
 import click
@@ -55,6 +56,7 @@ from kraft.const import UK_VERSION_VARNAME
 from kraft.const import UNIKRAFT_BUILDDIR
 from kraft.const import UNIKRAFT_FETCHED_FILE
 from kraft.const import UNIKRAFT_LIB_MAKEFILE_FETCH_LIB_PATTERN
+from kraft.const import UNIKRAFT_LIB_MAKEFILE_REG_LIB_PATTERN
 from kraft.const import UNIKRAFT_LIB_MAKEFILE_URL_EXT
 from kraft.const import UNIKRAFT_LIB_MAKEFILE_VERSION_EXT
 from kraft.const import UNIKRAFT_PREPARED_FILE
@@ -71,6 +73,7 @@ from kraft.template import get_template_config
 from kraft.template import get_templates_path
 from kraft.types import ComponentType
 from kraft.util import make_list_vars
+from kraft.sec.compartment import Compartment
 
 
 def intrusively_determine_lib_origin_url(localdir=None):
@@ -206,6 +209,9 @@ class Library(Component):
         information from the .kraftrc for a list of mirrors.
         """
 
+        if self.is_core:
+            return []
+
         mirror_bases = ctx.obj.settings.fetch_mirrors
         if mirror_bases is None or len(mirror_bases) == 0:
             return []
@@ -247,6 +253,11 @@ class Library(Component):
         """
         if self._origin_provider is None and self.origin_url is not None:
             provider_cls = determine_lib_provider(self._origin_url)
+            if provider_cls is None:
+                logger.warn(
+                    "Cannot determine provider for: %s" % self._origin_url
+                )
+                return None
             self._origin_provider = provider_cls(
                 origin_url=self._origin_url,
                 origin_version=self.origin_version
@@ -266,11 +277,22 @@ class Library(Component):
         return self._template_values
 
     @property
+    @click.pass_context
+    def localdir(ctx, self):
+        if self.is_core and self.core is not None:
+            return os.path.join(self.core.localdir, "lib", self.name)
+
+        return super(Library, self).localdir
+
+    @property
     def kname(self):
         name = self.name.upper()
 
-        if name.startswith('LIB'):
+        if name.startswith('APP') or name.startswith('LIB'):
             return name
+
+        if name.startswith('app'):
+            return 'APP%s' % name
 
         return 'LIB%s' % name
 
@@ -282,6 +304,22 @@ class Library(Component):
             return name
 
         return 'lib-%s' % name
+    
+    _hardening = []
+
+    @property
+    def hardening(self):
+        return self._hardening
+    
+    _compartment = []
+
+    @property
+    def compartment(self):
+        return self._compartment
+
+    @compartment.setter
+    def compartment(self, compartment=None):
+        self._compartment = compartment
 
     @click.pass_context
     def __init__(ctx, self, *args, **kwargs):
@@ -290,6 +328,9 @@ class Library(Component):
         self._origin_url = kwargs.get("origin_url", None)
         self._origin_version = kwargs.get("origin_version", None)
         self._template_value = dict()
+        self._hardening = kwargs.get('hardening', [])
+        self._compartment = kwargs.get('compartment', None)
+        self._files = []
 
         self.set_template_value('year', datetime.datetime.now().year)
         self.set_template_value('project_name', self._name)
@@ -558,7 +599,7 @@ class Library(Component):
             return self._builddir
 
         if self.localdir is None:
-            raise None
+            return None
 
         if not os.path.exists(ctx.obj.workdir):
             return None
@@ -574,10 +615,18 @@ class Library(Component):
         # Find the realy library name, at least, the name which is defined by
         # the Unikraft fetch sequence.
         s = open(makefile_uk, 'r')
-        libname = UNIKRAFT_LIB_MAKEFILE_FETCH_LIB_PATTERN.findall(s.read())[0]
+        text = s.read()
         s.close()
+        libname = UNIKRAFT_LIB_MAKEFILE_FETCH_LIB_PATTERN.findall(text)
 
-        self._builddir = os.path.join(builddir, libname)
+        # Try the library registration name
+        if len(libname) == 0:
+            libname = UNIKRAFT_LIB_MAKEFILE_REG_LIB_PATTERN.findall(text)
+
+        if len(libname) == 0:
+            return None
+
+        self._builddir = os.path.join(builddir, libname[0])
         return self._builddir
 
     @property
@@ -613,7 +662,57 @@ class Library(Component):
     def determine_source_files(self):
         return []
 
+    @property
+    def files(self):
+        return self._files
+    
+    def add_file(self, file=None):
+        if file not in self._files:
+            self._files.append(file)
+    
+    def repr(self):
+        config = super(Library, self).repr()
+
+        if config is True:
+            config = {}
+
+        if len(self.hardening) > 0:
+            config['hardening'] = self.hardening
+
+        if self.is_core:
+            config['is_core'] = True
+
+        if self.compartment is not None and \
+                isinstance(self.compartment, Compartment):
+            config['compartment'] = self.compartment.name
+
+        elif self.compartment is not None and \
+                isinstance(self.compartment, six.string_types):
+            config['compartment'] = self.compartment
+
+        return True if not config else config
+
 
 class LibraryManager(ComponentManager):
-    def __init__(self, components=[], cls=None):
-        super(LibraryManager, self).__init__(components, Library)
+    def __init__(self, components=[], cls=None, compartments=[], core=None):
+        super(LibraryManager, self).__init__(components, Library, core)
+
+        default_compartment = None
+        for compartment in compartments:
+            if compartment.default:
+                default_compartment = compartment
+                break
+
+        for i, lib in enumerate(self.components):
+            if lib.compartment is not None:
+                for compartment in compartments:
+                    if lib.compartment == compartment.name:
+                        self._components[i].compartment = compartment
+                        break
+
+        for i, lib in enumerate(self.components):
+            if lib.compartment is None:
+                self._components[i].compartment = default_compartment
+            elif isinstance(lib.compartment, six.string_types):
+                logger.warn("Unknown component: %s" % lib.compartment)
+                self._components[i].compartment = default_compartment

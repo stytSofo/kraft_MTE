@@ -98,6 +98,8 @@ TARBALL_SUPPORTED_EXTENSIONS = [
     '.tar.gz',
     '.tar.xz',
     '.tar',
+    '.tgz',
+    '.tbz2'
 ]
 
 SOURCEFORGE_PROJECT_NAME = re.compile(
@@ -132,6 +134,7 @@ UNIKRAFT_PREPARED_FILE = ".origin"
 UNIKRAFT_LIB_MAKEFILE_VERSION_EXT = '_VERSION'
 UNIKRAFT_LIB_MAKEFILE_URL_EXT = '_URL'
 UNIKRAFT_LIB_MAKEFILE_FETCH_LIB_PATTERN = re.compile(r'\$\(call fetch,([\w\-\_]+),')
+UNIKRAFT_LIB_MAKEFILE_REG_LIB_PATTERN = re.compile(r'\$\(eval\s+\$\(call\s+addlib_s,([\w\-\_]+),')
 
 UNIKRAFT_LIB_KNOWN_MAKEFILE_VAR_EXTS = [
     UNIKRAFT_LIB_MAKEFILE_VERSION_EXT,
@@ -191,7 +194,8 @@ UK_COMPAT_CORE_v0_4_0 = "0.4.0"
 
 KRAFT_SPEC_V04 = '0.4'
 KRAFT_SPEC_V05 = '0.5'
-KRAFT_SPEC_LATEST = KRAFT_SPEC_V05
+KRAFT_SPEC_V06 = '0.6'
+KRAFT_SPEC_LATEST = KRAFT_SPEC_V06
 
 UK_DBG_EXT = '.dbg'
 TMPL_EXT = '.tmpl'
