@@ -885,10 +885,7 @@ class Application(Component):
             gr_rule += gr_gen_rule("lname", default_comp)
 
             # add malloc/free/calloc replacement rule
-            if FCALLS_enabled:
-                gr_rule += get_sec_rule("mallocreplacer_fcalls.cocci")
-            else:
-                gr_rule += get_sec_rule("mallocreplacer.cocci")
+            gr_rule += get_sec_rule("mallocreplacer.cocci")
 
             # add heap local vars replacement rule
             if FCALLS_enabled:
