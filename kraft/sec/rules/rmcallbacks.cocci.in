@@ -1,0 +1,9 @@
+@cbvoid{{ rule_nr }}@
+identifier func;
+type T;
+@@
+
+- __attribute__(({{ lib_from_name }}_callback))
+T func(...) {
+...
+}

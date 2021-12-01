@@ -800,7 +800,10 @@ class Application(Component):
 
             # then generate cocci files dynamically from the template
             gr_rule_template = get_sec_rule("gatereplacer.cocci.in")
-            cb_rule_template = get_sec_rule("callbackreplacer.cocci.in")
+            if FCALLS_enabled:
+                cb_rule_template = get_sec_rule("rmcallbacks.cocci.in")
+            else:
+                cb_rule_template = get_sec_rule("callbackreplacer.cocci.in")
             gr_rule_template = gr_rule_template.replace("{{ comp_cur_nb }}",
                 str(lib.compartment.number))
             cb_rule_template = cb_rule_template.replace("{{ comp_cur_nb }}",
