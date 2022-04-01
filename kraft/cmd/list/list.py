@@ -216,8 +216,6 @@ def cmd_list(ctx, show_installed=False, show_core=False, show_plats=False,
                     latest_release = row.dists[UNIKRAFT_RELEASE_STABLE].latest
                 elif UNIKRAFT_RELEASE_STAGING in row.dists.keys():
                     latest_release = row.dists[UNIKRAFT_RELEASE_STAGING].latest
-                elif len(row.dists.keys()) == 1:
-                    latest_release = row.dists[list(row.dists.keys())[0]].latest
 
                 if return_json:
                     if member.plural not in data_json:
