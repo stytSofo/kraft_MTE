@@ -32,6 +32,7 @@
 from __future__ import absolute_import
 from __future__ import unicode_literals
 
+from .mte import MTEDriver
 from .intelpku import IntelPKUDriver
 from .fcalls import FcallsDriver
 from .vmept import VMEPTDriver

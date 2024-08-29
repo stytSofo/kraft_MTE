@@ -208,6 +208,7 @@
         "netmask": { "type": "string" },
         "interface": { "type": "string" },
         "driver": { "type": "string" },
+         "tag":{"type":"integer"},
         "type": { "type": "string" },
         "bridge_name": { "type": "string" }
       }

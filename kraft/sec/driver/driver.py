@@ -45,6 +45,8 @@ class Driver(object):
     def __init__(self, *args, **kwargs):
         self._config = kwargs
         self._name = kwargs.get('name', None)
+        if(self._name == 'MTE'):
+            self._color_mte = kwargs.get('tag', 0)
 
     def repr(self):
         return {}

@@ -37,13 +37,13 @@ from enum import Enum
 from .fcalls import FcallsDriver
 from .intelpku import IntelPKUDriver
 from .vmept import VMEPTDriver
-
+from .mte import MTEDriver
 
 class CompartmentDriverTypes(Enum):
     DRIVER_INTELPKU = ("intel-pku", IntelPKUDriver)
     DRIVER_VMEPT = ("vmept", VMEPTDriver)
     DRIVER_FCALLS = ("fcalls", FcallsDriver)
-
+    DRIVER_MTE = ("mte", MTEDriver)
     @property
     def name(self):
         return self.value[0]
@@ -51,6 +51,7 @@ class CompartmentDriverTypes(Enum):
     @property
     def cls(self):
         return self.value[1]
+    
 
     @classmethod
     def from_name(cls, name=None):
